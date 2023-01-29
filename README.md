@@ -1,1 +1,2 @@
-# R tools for creating and evaluating functional brain networks from microscopic brain imaging data.
+# Functional network analysis
+R tools for creating and evaluating functional brain networks from microscopic brain imaging data.
