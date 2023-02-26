@@ -1,0 +1,173 @@
+# Example of code to generate networks from IEG data and extract and compare centrality measures
+
+# Libraries #####################################################################
+
+if (!('readxl' %in% installed.packages()[,'Package'])){install.packages("readxl")}; require(readxl)
+if (!('ggcorrplot' %in% installed.packages()[,'Package'])){install.packages("ggcorrplot")}; require(ggcorrplot) # correlation matrix plots
+if (!('ggpubr' %in% installed.packages()[,'Package'])){install.packages("ggpubr")}; require(ggpubr) # statistics and sig asterisks on plots
+if (!('ggraph' %in% installed.packages()[,'Package'])){install.packages("ggraph")}; require(ggraph) # for better network plots
+if (!('ggforce' %in% installed.packages()[,'Package'])){install.packages("ggforce")}; require(ggforce) # network communities
+#if (!('concaveman' %in% installed.packages()[,'Package'])){install.packages("concaveman")}; require(concaveman) # network communities
+if (!('dplyr' %in% installed.packages()[,'Package'])){install.packages("dplyr")}; require(dplyr)
+if (!('Hmisc' %in% installed.packages()[,'Package'])){install.packages("Hmisc")}; require(Hmisc) #better functions for correlation matrices and p-values
+if (!('lattice' %in% installed.packages()[,'Package'])){install.packages("lattice")}; require(lattice) #for generating graphs, colors and matrices
+if (!('data.table' %in% installed.packages()[,'Package'])){install.packages("data.table")}; require(data.table) #for rbindlist
+if (!('igraph' %in% installed.packages()[,'Package'])){install.packages("igraph")}; require(igraph) #package for network generation and analysis
+if (!('boot' %in% installed.packages()[,'Package'])){install.packages("boot")}; require(boot)
+if (!('psych' %in% installed.packages()[,'Package'])){install.packages("psych")}; require(psych) #fisherz
+if (!('ggpattern' %in% installed.packages()[,'Package'])){install.packages("ggpattern")}; require(ggpattern) #dashed bars in ggplot
+if (!('beeswarm' %in% installed.packages()[,'Package'])){install.packages("beeswarm")}; require(beeswarm) #better jitter in ggplot
+if (!('rstatix' %in% installed.packages()[,'Package'])){install.packages("rstatix")}; require(rstatix) # statistics
+
+
+# Table must be organized as in this example
+  data.frame(Group = c("A", "B", "A", "C",  "..."),
+           Structure_1 = c(2, 1, 8, 5,  "..."),
+           Structure_2 = c(4, 2, 6, 4,  "..."),
+           Structure_3 = c(0, 1, 3, 9,  "..."),
+           Etc = c("...", "...", "...", "...",  "..."))
+           
+# Import data ##################################################################
+  df <- read_excel("~/cfos tables.xlsx")
+ 
+# Remove not necessary columns
+df_ns <- df %>% dplyr::filter(Group == "NS") %>% dplyr::select(-ID, -Group, -Freezing, -Batch)
+df_2s <- df %>% dplyr::filter(Group == "2S") %>% dplyr::select(-ID, -Group, -Freezing, -Batch)
+df_10s <- df %>% dplyr::filter(Group == "10S") %>% dplyr::select(-ID, -Group, -Freezing, -Batch)
+
+# Correlation matrices #########################################################
+cmatrix_ns_untresh <- corr_matrix_threshold(df_ns, thresh = -1, thresh.param ='r', negs = T)
+cmatrix_2s_untresh <- corr_matrix_threshold(df_2s, thresh = -1, thresh.param ='r', negs = T)
+cmatrix_10s_untresh <- corr_matrix_threshold(df_10s,  thresh = -1, thresh.param ='r', negs = T)
+
+# Filter
+# here I used as a treshold the mean + SD of all matrices combined
+tresh <- mean(rbind(cmatrix_ns_untresh[lower.tri(cmatrix_ns_untresh)],
+           cmatrix_2s_untresh[lower.tri(cmatrix_2s_untresh)] ,
+           cmatrix_10s_untresh[lower.tri(cmatrix_10s_untresh)] )) +
+  sd(rbind(cmatrix_ns_untresh[lower.tri(cmatrix_ns_untresh)],
+           cmatrix_2s_untresh[lower.tri(cmatrix_2s_untresh)] ,
+           cmatrix_10s_untresh[lower.tri(cmatrix_10s_untresh)] ))
+
+matrix_ns[matrix_ns < tresh] <- 0
+matrix_2s[matrix_2s < tresh] <- 0
+matrix_10s[matrix_10s < tresh] <- 0
+
+# Create G objects #############################################################
+
+G_ns <-graph.adjacency(as.matrix(matrix_ns), mode = "undirected", weighted = TRUE, diag = FALSE)
+G_2s <-graph.adjacency(as.matrix(matrix_2s), mode = "undirected", weighted = TRUE, diag = FALSE)
+G_10s <-graph.adjacency(as.matrix(matrix_10s), mode = "undirected", weighted = TRUE, diag = FALSE)
+
+# Plot networks (example)
+
+ggraph(G_ns, layout = "stress") +
+  geom_edge_link0(aes(edge_width = weight), edge_colour = "#404a5c") +
+  geom_node_point(aes(fill = as.character(membership(cluster_leading_eigen(G_ns))), 
+                      size = degree(G_ns)), shape = 21) +
+  scale_fill_manual(values = pallete_ns)+
+  scale_edge_width(range = c(1, 4)) +
+  scale_size(range = c(10, 20)) +
+  geom_node_text(aes(label = name), size = 4, fontface="bold", repel = FALSE) +
+  theme_void() +
+  theme(legend.position = "bottom")+
+  guides(size=FALSE, fill = FALSE)
+  
+# Centrality measures ######################################################
+## Get measures
+cent_ns = get_centrality_measures(G_ns, weighted=TRUE, nodal_efficiency= TRUE)
+cent_2s = get_centrality_measures(G_2s, weighted=TRUE, nodal_efficiency= TRUE)
+cent_10s =get_centrality_measures(G_10s, weighted=TRUE, nodal_efficiency= TRUE)
+
+cent_ns$Group <- "NS"
+cent_2s$Group <- "2S"
+cent_10s$Group <- "10S"
+
+cent_ns <- cent_ns %>% rownames_to_column(var = "Structure")
+cent_2s <- cent_2s %>% rownames_to_column(var = "Structure")
+cent_10s <- cent_10s %>% rownames_to_column(var = "Structure")
+
+merged_centrality <- bind_rows(cent_ns, cent_2s, cent_10s)
+
+merged_centrality$Group <- factor(merged_centrality$Group, levels = c("NS", "2S", "10S"))
+
+merged_centrality_long <- merged_centrality %>% 
+  pivot_longer(cols = 2:7, names_to = "Centrality", values_to = "value")
+
+## Compare measures (example)
+
+###Summary 
+merged_centrality %>% 
+  group_by(Group) %>% get_summary_stats(degree)
+  
+ ### Kruskal-Wallis
+merged_centrality %>% kruskal_test(degree ~ Group) 
+merged_centrality %>% kruskal_effsize(degree ~ Group) 
+
+### Wilcoxon test 
+merged_centrality %>%
+  wilcox_test(data =., degree ~ Group)
+
+# Random networks and global efficiency comparison (example)
+
+ge_ns <- NULL
+ge_ns$group <- "NS"
+ge_ns$method <- "Memory"
+ge_ns$mean <- Nodal_efficiency(G_ns, weighted = T) %>% mean()
+ge_ns$sd <- Nodal_efficiency(G_ns, weighted = T) %>% sd()
+ge_ns$ci <-1.96*(ge_ns$sd/sqrt(12))
+ge_ns <- ge_ns %>% as_data_frame(.name_repair = ~ c("Group", "Network", "Mean", "SD", "CI"))
+
+set.seed(222)
+wsm_ns <- Watts_Strogatz_model(G_ns, iterations=1000, trans_match_iter=100)
+wsm_nsx <- wsm_ns[[1]][["Global.efficiency"]]
+rge_ns <- NULL
+rge_ns$group <- "NS"
+rge_ns$method <- "Random"
+rge_ns$mean <- wsm_nsx[1]
+rge_ns$sd <- wsm_nsx[2]
+rge_ns$ci <- 1.96*(wsm_nsx[2]/sqrt(100))
+rge_ns <- rge_ns %>% as_data_frame(.name_repair = ~ c("Group", "Network", "Mean", "SD", "CI"))
+
+glob_ef <- rbind(ge_ns, rge_ns)
+
+conf_int_globaleff <- function(group1, group2){
+  # get the means and standard deviations of the two samples
+  mean1 <- group1$Mean
+  mean2 <- group2$Mean
+  sd1 <- group1$SD
+  sd2 <- group2$SD
+  
+  # get the size of the samples
+  n1 <- 12
+  n2 <- 12
+    
+  # calculate the standard error of the difference between means
+  se <- sqrt(sd1^2/n1 + sd2^2/n2)
+  
+  # calculate the difference between means
+  diffmeans <- mean2 - mean1
+  
+  # calculate the 95% confidence interval of the difference between means
+  confint <- (mean2 - mean1) + c(-1, 1) * qnorm(0.975) * se
+  
+  # print the confidence interval
+  x <- data.frame(Group1 = group1,
+                  Group2 = group2,
+                  Mean_Group1 = mean1,
+                  Mean_Group2 = mean2,
+                  Mean_diff = diffmeans,
+                  CI95diff_low = confint[1],
+                  CI95diff_up = confint[2])
+    x
+ }
+
+
+conf_int_globaleff(ge_ns, rge_ns)
+
+
+
+
+
+
+
